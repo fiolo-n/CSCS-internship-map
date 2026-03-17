@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Practicum Locations Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+
+    h2 {
+      margin-bottom: 10px;
+    }
+
+    #filters {
+      margin-bottom: 15px;
+    }
+
+    .filter-btn {
+      margin: 4px 6px 4px 0;
+      padding: 8px 12px;
+      border: 1px solid #999;
+      background: #f5f5f5;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .filter-btn:hover {
+      background: #e8e8e8;
+    }
+
+    #legend {
+      margin: 12px 0 18px 0;
+      font-size: 14px;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      margin-right: 16px;
+      margin-bottom: 8px;
+    }
+
+    .legend-color {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 6px;
+      border: 1px solid #444;
+    }
+
+    #layout {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
+
+    #sidebar {
+      width: 320px;
+      max-height: 800px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fafafa;
+    }
+
+    #sidebar h3 {
+      margin-top: 0;
+    }
+
+    .location-item {
+      padding: 10px;
+      margin-bottom: 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: white;
+      cursor: pointer;
+    }
+
+    .location-item:hover {
+      background: #f0f7ff;
+    }
+
+    .location-title {
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+
+    .location-meta {
+      font-size: 14px;
+      color: #444;
+    }
+
+    #map {
+      flex: 1;
+      height: 800px;
+      min-width: 0;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>Practicum Locations</h2>
+
+  <div id="filters"></div>
+  <div id="legend"></div>
+
+  <div id="layout">
+    <div id="sidebar">
+      <h3>Locations</h3>
+      <div id="location-list"></div>
+    </div>
+    <div id="map"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/papaparse@5.3.2/papaparse.min.js"></script>
+
+  <script>
+    var map = L.map('map').setView([39.3292, -82.1013], 12);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    var allMarkers = [];
+    var allRows = [];
+    var categories = new Set();
+
+    const colorPalette = [
+      "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00",
+      "#a65628", "#f781bf", "#999999", "#66c2a5", "#fc8d62"
+    ];
+
+    const categoryColors = {};
+
+    function getCategoryColor(category) {
+      if (!categoryColors[category]) {
+        const index = Object.keys(categoryColors).length % colorPalette.length;
+        categoryColors[category] = colorPalette[index];
+      }
+      return categoryColors[category];
+    }
+
+    function clearMarkers() {
+      allMarkers.forEach(marker => map.removeLayer(marker));
+      allMarkers = [];
+    }
+
+    function makePopup(row) {
+      let popup = "<b>" + (row.Location_Name || "") + "</b><br>";
+
+      if (row.Address) popup += "Address: " + row.Address + "<br>";
+      if (row.Category) popup += "Category: " + row.Category + "<br>";
+      if (row.Contact) popup += "Contact: " + row.Contact + "<br>";
+      if (row.Contact_Email) {
+        popup += "Email: <a href='mailto:" + row.Contact_Email + "'>" + row.Contact_Email + "</a><br>";
+      }
+      if (row.Contact_Phone) popup += "Phone: " + row.Contact_Phone + "<br>";
+      if (row.Website) {
+        popup += "Website: <a href='" + row.Website + "' target='_blank'>Open site</a><br>";
+      }
+
+      return popup;
+    }
+
+    function buildList(rowsToShow) {
+      const listDiv = document.getElementById("location-list");
+      listDiv.innerHTML = "";
+
+      if (rowsToShow.length === 0) {
+        listDiv.innerHTML = "<p>No locations found.</p>";
+        return;
+      }
+
+      rowsToShow.forEach(function(row) {
+        const item = document.createElement("div");
+        item.className = "location-item";
+
+        item.innerHTML =
+          "<div class='location-title'>" + (row.Location_Name || "") + "</div>" +
+          "<div class='location-meta'>" +
+          (row.Category || "") + "<br>" +
+          (row.Address || "") +
+          "</div>";
+
+        item.onclick = function() {
+          const lat = parseFloat(row.Latitude);
+          const lng = parseFloat(row.Longitude);
+
+          map.setView([lat, lng], 15);
+
+          allMarkers.forEach(function(marker) {
+            const markerLatLng = marker.getLatLng();
+            if (
+              Math.abs(markerLatLng.lat - lat) < 0.0003 &&
+              Math.abs(markerLatLng.lng - lng) < 0.0003
+            ) {
+              marker.openPopup();
+            }
+          });
+        };
+
+        listDiv.appendChild(item);
+      });
+    }
+
+    function showMarkers(filterCategory = "All") {
+      clearMarkers();
+
+      let bounds = [];
+      let visibleRows = [];
+
+      allRows.forEach(function(row) {
+        if (!row.Latitude || !row.Longitude) return;
+        if (filterCategory !== "All" && row.Category !== filterCategory) return;
+
+        const color = getCategoryColor(row.Category || "Other");
+
+        let lat = parseFloat(row.Latitude);
+        let lng = parseFloat(row.Longitude);
+
+        lat += (Math.random() - 0.5) * 0.0004;
+        lng += (Math.random() - 0.5) * 0.0004;
+
+        var marker = L.circleMarker([lat, lng], {
+          radius: 8,
+          fillColor: color,
+          color: "#222",
+          weight: 1,
+          opacity: 1,
+          fillOpacity: 0.85
+        }).addTo(map);
+
+        marker.bindPopup(makePopup(row));
+
+        allMarkers.push(marker);
+        bounds.push([lat, lng]);
+        visibleRows.push(row);
+      });
+
+      buildList(visibleRows);
+
+      if (bounds.length > 0) {
+        map.fitBounds(bounds, { padding: [30, 30] });
+      }
+    }
+
+    function buildFilterButtons() {
+      const filterDiv = document.getElementById("filters");
+      filterDiv.innerHTML = "";
+
+      const allBtn = document.createElement("button");
+      allBtn.innerText = "All";
+      allBtn.className = "filter-btn";
+      allBtn.onclick = function() {
+        showMarkers("All");
+      };
+      filterDiv.appendChild(allBtn);
+
+      Array.from(categories).sort().forEach(function(category) {
+        const btn = document.createElement("button");
+        btn.innerText = category;
+        btn.className = "filter-btn";
+        btn.onclick = function() {
+          showMarkers(category);
+        };
+        filterDiv.appendChild(btn);
+      });
+    }
+
+    function buildLegend() {
+      const legendDiv = document.getElementById("legend");
+      legendDiv.innerHTML = "<strong>Category Colors:</strong><br>";
+
+      Array.from(categories).sort().forEach(function(category) {
+        const color = getCategoryColor(category);
+
+        const item = document.createElement("span");
+        item.className = "legend-item";
+        item.innerHTML =
+          "<span class='legend-color' style='background:" + color + ";'></span>" +
+          category;
+
+        legendDiv.appendChild(item);
+      });
+    }
+
+    Papa.parse("CSCS_Map_Location_Table.csv", {
+      download: true,
+      header: true,
+      complete: function(results) {
+        allRows = results.data.filter(row => row.Location_Name);
+
+        allRows.forEach(function(row) {
+          if (row.Category && row.Category.trim() !== "") {
+            categories.add(row.Category);
+          }
+        });
+
+        buildFilterButtons();
+        buildLegend();
+        showMarkers("All");
+      }
+    });
+  </script>
+
+</body>
+</html>
